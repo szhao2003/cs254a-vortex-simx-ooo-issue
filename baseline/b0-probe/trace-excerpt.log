@@ -1,0 +1,6 @@
+TRACE        490: *** scoreboard-stall: dependents={x5 (#32), x6 (#33)}, cid=0, wid=0, cta_id=0, tmask=1111, PC=0x80000090, wb=1, rd=x7, rs0=x5, rs1=x6, ex=ALU (#34)
+TRACE        498: cluster0-socket0-core0-pipeline decode: cid=0, wid=0, cta_id=0, tmask=1111, PC=0x80000094, wb=1, rd=x28, rs0=x13, rs1=x15, ex=ALU (#35)
+TRACE        533: cluster0-socket0-core0-pipeline issue: cid=0, wid=0, cta_id=0, tmask=1111, PC=0x80000090, wb=1, rd=x7, rs0=x5, rs1=x6, ex=ALU (#34)
+TRACE        534: cluster0-socket0-core0-pipeline issue: cid=0, wid=0, cta_id=0, tmask=1111, PC=0x80000094, wb=1, rd=x28, rs0=x13, rs1=x15, ex=ALU (#35)
+PERF: instrs=180, cycles=663, IPC=0.271
+PASSED!
