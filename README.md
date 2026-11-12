@@ -36,3 +36,13 @@ make -C tests/regression/demo -j4
 ```
 
 The stock demo verified 1,024 integer results with a 4×1 grid and 4×1 blocks. It printed `PASSED!` and reported 2,444 instructions and 6,448 simulated cycles. See the [recorded demo output](baseline/demo-smoke.log).
+
+## Original SimX issue baseline (B0)
+
+The probe places a load-dependent addition ahead of an independent address calculation in the same warp. Run it after building the stock demo. From this repository, pass the absolute paths to the stock Vortex checkout and its RV32 toolchain.
+
+```bash
+bash baseline/b0-probe/run.sh /path/to/vortex-baseline /path/to/vortex-tools-v3.0.1 ./b0-results
+```
+
+The debug and release runs both verify 16 outputs and report 180 instructions and 663 simulated cycles. In warp 0, the independent addition decodes at cycle 498 and issues at cycle 534, one cycle after the older load-dependent addition issues. See the [recorded trace excerpt](baseline/b0-probe/trace-excerpt.log) and [disassembly](baseline/b0-probe/kernel.disasm).
