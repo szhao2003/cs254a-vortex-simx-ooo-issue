@@ -46,3 +46,7 @@ bash baseline/b0-probe/run.sh /path/to/vortex-baseline /path/to/vortex-tools-v3.
 ```
 
 The debug and release runs both verify 16 outputs and report 180 instructions and 663 simulated cycles. In warp 0, the independent addition decodes at cycle 498 and issues at cycle 534, one cycle after the older load-dependent addition issues. See the [recorded trace excerpt](baseline/b0-probe/trace-excerpt.log) and [disassembly](baseline/b0-probe/kernel.disasm).
+
+## Correctness tests
+
+The [correctness tests](tests/correctness/README.md) establish the expected output and instruction order on stock SimX before we test the modified issue logic.
