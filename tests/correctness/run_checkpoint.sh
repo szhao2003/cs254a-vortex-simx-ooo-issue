@@ -15,7 +15,12 @@ bash "$probe_dir/run.sh" "$patched" "$tools" "$output/b1" "$probe_dir/kernel.cpp
 bash "$probe_dir/run.sh" "$patched" "$tools" "$output/o4" "$probe_dir/kernel.cpp" -n1 o4
 SIMX_OOO_REJECT_FIRST_BYPASS=1 bash "$probe_dir/run.sh" \
     "$patched" "$tools" "$output/retry" "$probe_dir/kernel.cpp" -n1 o4
-python3 "$test_dir/check_retry.py" "$output" "$output/b0"
+case ${VORTEX_BASE_COMMIT:-da55a516a48b49013724f697d3c12a48932b449f} in
+    da55a516a48b49013724f697d3c12a48932b449f) expected=(168 622 619) ;;
+    b447578d9f3bb116d658c614cf3407153f0536da) expected=(180 663 661) ;;
+    *) echo "Unsupported Vortex revision" >&2; exit 1 ;;
+esac
+python3 "$test_dir/check_retry.py" "$output" "$output/b0" "${expected[@]}"
 
 bash "$probe_dir/run.sh" "$patched" "$tools" "$output/hazards" "$test_dir/hazards.cpp" -n1 o4
 bash "$probe_dir/run.sh" "$patched" "$tools" "$output/boundaries" "$test_dir/boundaries.cpp" -n8 o4

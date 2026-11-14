@@ -10,6 +10,7 @@ For the stock reference runs, use these commands from the repository root after 
 ```bash
 vortex=/path/to/vortex-baseline
 tools=/path/to/vortex-tools-v3.0.1
+export VORTEX_BASE_COMMIT=b447578d9f3bb116d658c614cf3407153f0536da
 bash baseline/b0-probe/run.sh "$vortex" "$tools" ./b0-results/hazards tests/correctness/hazards.cpp -n1
 bash baseline/b0-probe/run.sh "$vortex" "$tools" ./b0-results/boundaries tests/correctness/boundaries.cpp -n8
 ```

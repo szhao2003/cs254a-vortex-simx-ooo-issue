@@ -4,7 +4,7 @@ set -euo pipefail
 repo=${1:?pass the absolute path to the Vortex source directory}
 tooldir=${2:?pass the absolute path to the Vortex toolchain directory}
 output=${3:?pass an output directory}
-expected_commit=b447578d9f3bb116d658c614cf3407153f0536da
+expected_commit=${VORTEX_BASE_COMMIT:-da55a516a48b49013724f697d3c12a48932b449f}
 mode=${6:-b0}
 if [[ $(git -C "$repo" rev-parse HEAD) != "$expected_commit" ]]; then
     echo "Expected Vortex base commit $expected_commit" >&2

@@ -1,6 +1,19 @@
 # cs254a-vortex-simx-ooo-issue
 A four-entry per-warp out-of-order issue window for Vortex SimX, with correctness tests and baseline performance comparisons.
 
+## Current development baseline
+
+Use upstream Vortex commit `da55a516a48b49013724f697d3c12a48932b449f` with the v3.0.2 RV32 toolchain for new development. Follow the two-checkout build steps below with that revision and a separate toolchain directory. Apply `patches/simx_ooo_window_da55a516.patch` to the patched checkout.
+
+Run the validation suite from the project repository root, with absolute paths to the two built checkouts and the toolchain.
+
+```bash
+VORTEX_BASE_COMMIT=da55a516a48b49013724f697d3c12a48932b449f \
+    bash tests/correctness/run_checkpoint.sh "$stock" "$patched" "$tools" ./current-results
+```
+
+On this revision, the issue probe retires 168 instructions. Stock and patched in-order issue both take 622 cycles and produce matching issue traces. The four-entry window takes 619 cycles. These runs use the upstream warp arbitration. For the original checkpoint commands and results, check out project commit `94b70aa`. The sections below describe that milestone.
+
 ## Baseline setup milestone
 
 This milestone records the original Vortex SimX build and demo smoke test. The upstream source is Vortex v3.0 at commit `b447578d9f3bb116d658c614cf3407153f0536da`, including its pinned submodules. The run used WSL Ubuntu 22.04, the RV32 toolchain release v3.0.1, and the default SimX configuration.
@@ -42,7 +55,7 @@ The stock demo verified 1,024 integer results with a 4×1 grid and 4×1 blocks. 
 The probe places a load-dependent addition ahead of an independent address calculation in the same warp. Run it after building the stock demo. From this repository, pass the absolute paths to the stock Vortex checkout and its RV32 toolchain.
 
 ```bash
-bash baseline/b0-probe/run.sh /path/to/vortex-baseline /path/to/vortex-tools-v3.0.1 ./b0-results
+VORTEX_BASE_COMMIT=b447578d9f3bb116d658c614cf3407153f0536da bash baseline/b0-probe/run.sh /path/to/vortex-baseline /path/to/vortex-tools-v3.0.1 ./b0-results
 ```
 
 The debug and release runs both verify 16 outputs and report 180 instructions and 663 simulated cycles. In warp 0, the independent addition decodes at cycle 498 and issues at cycle 534, one cycle after the older load-dependent addition issues. See the [recorded trace excerpt](baseline/b0-probe/trace-excerpt.log) and [disassembly](baseline/b0-probe/kernel.disasm).
@@ -89,7 +102,7 @@ git -C "$patched" apply "$PWD/patches/simx_ooo_window.patch"
     make -C sw/runtime/stub -j4
 )
 
-bash tests/correctness/run_checkpoint.sh "$stock" "$patched" "$tools" ./checkpoint-results
+VORTEX_BASE_COMMIT=b447578d9f3bb116d658c614cf3407153f0536da bash tests/correctness/run_checkpoint.sh "$stock" "$patched" "$tools" ./checkpoint-results
 ```
 
 The issue probe reports 180 instructions in all three modes. B0 and B1 take 663 cycles and have identical issue traces. O4 takes 661 cycles and records four bypasses. The retry check deliberately rejects the first bypass once and verifies that the instruction later issues exactly once. The lane-mask check verifies 32 masked bypasses and 32 cases where a younger XOR waits for an older store to issue. Each run saves its trace and release log under the output directory.
