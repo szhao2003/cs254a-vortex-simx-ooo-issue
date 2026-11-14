@@ -1,0 +1,13 @@
+workload,input,warps_per_core,cores,in_order_cycles,o4_cycles
+regression_sgemm,16,4,1,18358,18358
+regression_sgemm,16,4,4,4899,4890
+memory_probe,2048,4,1,27539,27395
+memory_probe,2048,4,4,14036,13933
+opencl_sgemm,32,32,1,209696,209904
+opencl_sgemm,32,32,4,75594,72760
+opencl_sgemm2,16,32,1,18656,18816
+opencl_sgemm2,16,32,4,13271,12593
+opencl_sgemm3,16,32,1,26270,26130
+opencl_sgemm3,16,32,4,15772,15674
+multikernel,256,4,1,44595,44510
+multikernel,256,4,4,19779,19741

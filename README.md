@@ -1,108 +1,112 @@
-# cs254a-vortex-simx-ooo-issue
-A four-entry per-warp out-of-order issue window for Vortex SimX, with correctness tests and baseline performance comparisons.
+# Vortex SimX four-entry issue window
 
-## Current development baseline
+This project adds restricted out-of-order issue to Vortex SimX. Each warp can issue an independent integer ALU instruction while an older instruction waits. The project also includes an optional RTL-style GTO arbiter and a standalone RTL window for estimating hardware costs.
 
-Use upstream Vortex commit `da55a516a48b49013724f697d3c12a48932b449f` with the v3.0.2 RV32 toolchain for new development. Follow the two-checkout build steps below with that revision and a separate toolchain directory. Apply `patches/simx_ooo_window_da55a516.patch` to the patched checkout.
+## 1. Set up Ubuntu
 
-Run the validation suite from the project repository root, with absolute paths to the two built checkouts and the toolchain.
-
-```bash
-VORTEX_BASE_COMMIT=da55a516a48b49013724f697d3c12a48932b449f \
-    bash tests/correctness/run_checkpoint.sh "$stock" "$patched" "$tools" ./current-results
-```
-
-On this revision, the issue probe retires 168 instructions. Stock and patched in-order issue both take 622 cycles and produce matching issue traces. The four-entry window takes 619 cycles. These runs use the upstream warp arbitration. For the original checkpoint commands and results, check out project commit `94b70aa`. The sections below describe that milestone.
-
-## Baseline setup milestone
-
-This milestone records the original Vortex SimX build and demo smoke test. The upstream source is Vortex v3.0 at commit `b447578d9f3bb116d658c614cf3407153f0536da`, including its pinned submodules. The run used WSL Ubuntu 22.04, the RV32 toolchain release v3.0.1, and the default SimX configuration.
-
-## Reproduce the stock demo
-
-Run these commands in Ubuntu. The toolchain installer is for a fresh toolchain directory. The recorded run used an existing installation of the same release.
+Use Ubuntu 22.04, including Ubuntu under WSL 2. Run the commands below in Bash. Keep the Vortex checkouts in the Linux home directory.
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y git python3 build-essential cmake ccache zlib1g-dev libtinfo-dev libncurses-dev uuid-dev libboost-serialization-dev libpng-dev libhwloc-dev pkg-config ca-certificates wget curl bzip2 xz-utils
-
-git clone --no-checkout https://github.com/vortexgpgpu/vortex.git vortex-baseline
-cd vortex-baseline
-git checkout --detach b447578d9f3bb116d658c614cf3407153f0536da
-git submodule update --init --recursive
-git status --short
-
-toolchain_dir="$HOME/vortex-tools-v3.0.1"
-mkdir -p build
-cd build
-../configure --xlen=32 --tooldir="$toolchain_dir"
-./ci/toolchain_install.sh --riscv32 --llvm --libc32 --libcrt32
-
-make -C ../third_party softfloat
-make -C ../third_party ramulator
-make -C sim/simx -j4
-make -C sw/kernel -j4
-make -C sw/runtime/stub -j4
-make -C sw/runtime/simx -j4
-make -C tests/regression/demo -j4
-./ci/blackbox.sh --driver=simx --app=demo
+sudo apt-get install -y git python3 build-essential cmake ccache pkg-config \
+    zlib1g-dev libtinfo-dev libncurses-dev uuid-dev libboost-serialization-dev \
+    libpng-dev libhwloc-dev ca-certificates wget curl bzip2 xz-utils unzip
+git clone --branch final-evaluation https://github.com/szhao2003/cs254a-vortex-simx-ooo-issue.git
+cd cs254a-vortex-simx-ooo-issue
 ```
 
-The stock demo verified 1,024 integer results with a 4×1 grid and 4×1 blocks. It printed `PASSED!` and reported 2,444 instructions and 6,448 simulated cycles. See the [recorded demo output](baseline/demo-smoke.log).
+## 2. Build stock and patched Vortex
 
-## Original SimX issue baseline (B0)
-
-The probe places a load-dependent addition ahead of an independent address calculation in the same warp. Run it after building the stock demo. From this repository, pass the absolute paths to the stock Vortex checkout and its RV32 toolchain.
+Run this block from the project repository root. It creates two checkouts at the same upstream revision and installs the pinned RV32 toolchain.
 
 ```bash
-VORTEX_BASE_COMMIT=b447578d9f3bb116d658c614cf3407153f0536da bash baseline/b0-probe/run.sh /path/to/vortex-baseline /path/to/vortex-tools-v3.0.1 ./b0-results
+set -e
+project="$PWD"
+base=da55a516a48b49013724f697d3c12a48932b449f
+stock="$HOME/vortex-stock-da55a516"
+patched="$HOME/vortex-ooo-da55a516"
+tools="$HOME/vortex-tools-v3.0.2"
+
+for checkout in "$stock" "$patched"; do
+    git init "$checkout"
+    git -C "$checkout" fetch --depth=1 https://github.com/vortexgpgpu/vortex.git "$base"
+    git -C "$checkout" checkout --detach FETCH_HEAD
+    git -C "$checkout" submodule update --init --recursive --depth 1
+    mkdir -p "$checkout/build"
+    (cd "$checkout/build" && ../configure --xlen=32 --tooldir="$tools")
+done
+
+git -C "$patched" apply --check "$project/patches/simx_ooo_window_da55a516_gto.patch"
+git -C "$patched" apply "$project/patches/simx_ooo_window_da55a516_gto.patch"
+
+(cd "$stock/build" && ./ci/toolchain_install.sh --riscv32 --llvm --libc32 --libcrt32)
+
+for checkout in "$stock" "$patched"; do
+    (
+        cd "$checkout/build"
+        make -C ../third_party softfloat
+        make -C ../third_party ramulator
+        make -C sw/kernel -j4
+        make -C sw/runtime/stub -j4
+    )
+done
 ```
 
-The debug and release runs both verify 16 outputs and report 180 instructions and 663 simulated cycles. In warp 0, the independent addition decodes at cycle 498 and issues at cycle 534, one cycle after the older load-dependent addition issues. See the [recorded trace excerpt](baseline/b0-probe/trace-excerpt.log) and [disassembly](baseline/b0-probe/kernel.disasm).
+## 3. Check the implementation
 
-## Correctness tests
-
-The [correctness tests](tests/correctness/README.md) cover register dependencies, lane masks, store ordering, and retry after an operand-input rejection.
-
-## Checkpoint 2 implementation
-
-Vortex already has a four-entry instruction buffer per warp. With out-of-order issue enabled, SimX checks younger entries when the head cannot issue. A younger single-uop integer ALU instruction can pass an older entry only if the register checks and ordering rules allow it. The existing scoreboard tracks instructions that have already issued. The window also checks for RAW, WAR, and WAW hazards against older instructions still in the buffer.
-
-The design keeps Vortex's existing scoreboard, instruction buffer, and warp arbitration. sCROOGe uses a separate issue buffer and in-flight buffer. Here, the change is limited to how SimX picks an instruction within a warp.
-
-| Mode | Source | Issue behavior |
-| --- | --- | --- |
-| B0 | Pinned stock Vortex checkout | Head of the buffer only |
-| B1 | Patched checkout, `SIMX_OOO_WINDOW=0` | Head of the buffer only |
-| O4 | Patched checkout, `SIMX_OOO_WINDOW=1` | Eligible younger instructions can issue early |
-
-### Run the checkpoint tests
-
-Keep the stock checkout from the baseline setup above. Create a second checkout at the same revision, apply the patch, and build it with the same RV32 toolchain. Run this from the root of this project repository in Ubuntu. Set the three paths for your machine.
+Run this from the project repository root in the same Bash session as setup. If you opened a new terminal, set `stock`, `patched`, and `tools` to the paths from Step 2 first. Run one experiment at a time because the scripts rebuild the simulator in the same build directory.
 
 ```bash
-stock="$HOME/vortex-baseline"
-patched="$HOME/vortex-checkpoint"
-tools="$HOME/vortex-tools-v3.0.1"
+SIMX_GTO=0 bash tests/correctness/run_checkpoint.sh "$stock" "$patched" "$tools" ./validation-output
+```
 
-git clone --no-checkout https://github.com/vortexgpgpu/vortex.git "$patched"
-git -C "$patched" checkout --detach b447578d9f3bb116d658c614cf3407153f0536da
-git -C "$patched" submodule update --init --recursive
-git -C "$patched" apply --check "$PWD/patches/simx_ooo_window.patch"
-git -C "$patched" apply "$PWD/patches/simx_ooo_window.patch"
+The quick check uses stock warp arbitration to check that disabling the window reproduces the stock issue trace. Expect 168 instructions in all three runs. The stock and patched in-order runs take 622 cycles, and the out-of-order run takes 619 cycles. The script also checks retry after an injected rejection, register hazards, lane masks, and store ordering. See the trace and release logs in each output subdirectory.
 
+## 4. Reproduce performance results
+
+Use the same paths from setup. In the GTO experiments, B1 is patched in-order issue and O4 enables the four-entry window. Both use GTO. B0 in the controlled matrix uses upstream arbitration.
+
+```bash
+python3 tests/b0_probe/run_matrix.py "$stock" "$patched" "$tools" \
+    ./matrix-logs ./matrix.csv --gto
+bash scripts/run_gto_sgemm.sh "$patched" "$tools" ./sgemm-logs
+bash scripts/run_gto_memory.sh "$patched" "$tools" ./memory-logs
+```
+
+The matrix fixes the number of outputs and varies independent instruction count, position, and warp count. The SGEMM script compares GreedyRR and GTO at one and four cores. The memory script reports D-cache and off-chip memory counters for SGEMM and a fixed-workload probe. The matrix reference is in [results/gto_window_matrix.csv](results/gto_window_matrix.csv).
+
+For the paper-listed OpenCL workloads, install the OpenCL headers and loader and add the pinned PoCL package.
+
+```bash
+sudo apt-get install -y opencl-headers ocl-icd-opencl-dev
+(cd "$patched/build" && ./ci/toolchain_install.sh --pocl)
+bash scripts/run_gto_opencl.sh "$patched" "$tools" ./opencl-logs
+```
+
+The OpenCL runs use 32 configured warps per core and four lanes per warp. The input sizes come from the defaults in the upstream revision cited by the paper. The artifact's exact launch arguments are unverified. For example, four-core GTO `sgemm2` takes 13,271 cycles in order and 12,593 with the window enabled. See [application cycle counts](results/gto_app_cycles.csv).
+
+To run the three-launch regression, select `cores=1` or `cores=4` and run the following from the project repository root.
+
+```bash
+cores=4
 (
-    set -e
-    mkdir -p "$patched/build"
     cd "$patched/build"
-    ../configure --xlen=32 --tooldir="$tools"
-    make -C ../third_party softfloat
-    make -C ../third_party ramulator
-    make -C sw/kernel -j4
-    make -C sw/runtime/stub -j4
+    export CONFIGS="-DVX_CFG_NUM_CORES=$cores" MAKEFLAGS=-j4 SIMX_GTO=1 SIMX_OOO_STATS=1
+    make -C tests/regression/multikernel
+    for window in 0 1; do
+        SIMX_OOO_WINDOW=$window ./ci/blackbox.sh --driver=simx --app=multikernel --args=-n256
+    done
 )
-
-VORTEX_BASE_COMMIT=b447578d9f3bb116d658c614cf3407153f0536da bash tests/correctness/run_checkpoint.sh "$stock" "$patched" "$tools" ./checkpoint-results
 ```
 
-The issue probe reports 180 instructions in all three modes. B0 and B1 take 663 cycles and have identical issue traces. O4 takes 661 cycles and records four bypasses. The retry check deliberately rejects the first bypass once and verifies that the instruction later issues exactly once. The lane-mask check verifies 32 masked bypasses and 32 cases where a younger XOR waits for an older store to issue. Each run saves its trace and release log under the output directory.
+## 5. Reproduce the RTL cost estimate
+
+Install Verilator with `--binary` and timing support, Yosys with ABC, and OpenSTA. Use the [Nangate45 typical Liberty file](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts/blob/master/flow/platforms/nangate45/lib/NangateOpenCellLibrary_typical.lib). Its SHA-256 for the recorded run is `8d540a4d4cf6d09d27c87ad067857a9c0c2eeb023ab7a56e058cd3113db4e9b1`.
+
+The runner looks for `verilator`, `yosys`, and `sta` on your PATH. If you installed them elsewhere, set `VERILATOR`, `YOSYS`, and `STA` to the corresponding executable paths.
+
+```bash
+bash scripts/run_rtl_window.sh ./rtl-output /absolute/path/to/NangateOpenCellLibrary_typical.lib
+```
+
+The script runs the Verilator testbench, maps both variants with Yosys, and reports OpenSTA setup slack at a 2 ns clock period. The reference used Verilator 5.028, Yosys 0.57+157, and OpenSTA 2.0.17. See [results/rtl_window_cost.csv](results/rtl_window_cost.csv). The estimates apply to the standalone window before layout.

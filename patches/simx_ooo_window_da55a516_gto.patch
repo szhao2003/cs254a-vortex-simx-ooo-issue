@@ -1,8 +1,8 @@
 diff --git a/sim/common/simobject.h b/sim/common/simobject.h
-index b3c9879..65f6a39 100644
+index 5cc55e3..6e92ea4 100644
 --- a/sim/common/simobject.h
 +++ b/sim/common/simobject.h
-@@ -780,6 +780,26 @@ public:
+@@ -817,6 +817,26 @@ public:
      this->queue_pop();
    }
  
@@ -30,10 +30,10 @@ index b3c9879..65f6a39 100644
      __assert(out != nullptr, "output target is null");
      if (this->empty()) return false;
 diff --git a/sim/common/simobject_functional.h b/sim/common/simobject_functional.h
-index 8074a17..1b09aa3 100644
+index 1166817..f40b707 100644
 --- a/sim/common/simobject_functional.h
 +++ b/sim/common/simobject_functional.h
-@@ -795,6 +795,26 @@ public:
+@@ -822,6 +822,26 @@ public:
      this->queue_pop();
    }
  
@@ -61,7 +61,7 @@ index 8074a17..1b09aa3 100644
      __assert(out != nullptr, "output target is null");
      if (this->empty()) return false;
 diff --git a/sim/simx/core.cpp b/sim/simx/core.cpp
-index ec729d8..f6ef056 100644
+index aa732c4..fc2492b 100644
 --- a/sim/simx/core.cpp
 +++ b/sim/simx/core.cpp
 @@ -19,6 +19,7 @@
@@ -72,16 +72,16 @@ index ec729d8..f6ef056 100644
  
  #include "scheduler.h"
  #include "decode.h"
-@@ -54,6 +55,61 @@
- 
- using namespace vortex;
+@@ -88,6 +89,61 @@ static uint32_t gather_merge_lanes(uint32_t fu) {
+   return (lanes < VX_CFG_SIMD_WIDTH) ? lanes : 0;
+ }
  
 +namespace {
 +
 +bool is_window_alu(const instr_trace_t* trace) {
 +  const auto& instr = *trace->instr_ptr;
 +  return std::holds_alternative<AluType>(trace->op_type)
-+      && !instr.is_macro_op() && !instr.is_wstall()
++      && !instr.is_macro_op() && !instr.is_wstall() && !instr.get_issue_yield()
 +      && (instr.get_fu_lock() == instr.get_fu_unlock())
 +      && !instr.fcsr_reads() && !instr.fcsr_writes();
 +}
@@ -92,7 +92,7 @@ index ec729d8..f6ef056 100644
 +  const auto* lsu = std::get_if<LsuType>(&trace->op_type);
 +  const auto& instr = *trace->instr_ptr;
 +  return lsu && *lsu == LsuType::LOAD
-+      && !instr.is_macro_op() && !instr.is_wstall()
++      && !instr.is_macro_op() && !instr.is_wstall() && !instr.get_issue_yield()
 +      && (instr.get_fu_lock() == instr.get_fu_unlock());
 +}
 +
@@ -134,7 +134,16 @@ index ec729d8..f6ef056 100644
  class Core::Impl {
  public:
    Impl(const SimContext& ctx, Core* simobject)
-@@ -313,6 +369,24 @@ public:
+@@ -101,7 +157,7 @@ public:
+     , lmem_switch_(VX_CFG_NUM_LSU_BLOCKS)
+     , mem_coalescers_(VX_CFG_NUM_LSU_BLOCKS)
+     // As the scoreboard's out_arb: a matrix arbiter past 8 warps per slot.
+-    , ibuffer_arbs_(VX_CFG_ISSUE_WIDTH, {(PER_ISSUE_WARPS > 8) ? ArbiterType::GreedyMatrix : ArbiterType::GreedyRR, PER_ISSUE_WARPS})
++    , ibuffer_arbs_(VX_CFG_ISSUE_WIDTH, {window_option("SIMX_GTO") ? ArbiterType::GTO : ((PER_ISSUE_WARPS > 8) ? ArbiterType::GreedyMatrix : ArbiterType::GreedyRR), PER_ISSUE_WARPS})
+     , issue_lock_owner_(VX_CFG_ISSUE_WIDTH, kLockOpen)
+     , issue_yield_(VX_CFG_ISSUE_WIDTH, kNoYield)
+     , fu_credits_(VX_CFG_ISSUE_WIDTH, std::vector<uint32_t>((uint32_t)FUType::Count, 0))
+@@ -441,6 +497,24 @@ public:
      this->reset();
    }
  
@@ -159,17 +168,17 @@ index ec729d8..f6ef056 100644
    void reset() {
      for (auto& arb : ibuffer_arbs_) {
        arb.reset();
-@@ -578,6 +652,7 @@ public:
+@@ -799,6 +873,7 @@ public:
  
      // issue ibuffer instructions
      for (uint32_t iw = 0; iw < VX_CFG_ISSUE_WIDTH; ++iw) {
 +      std::array<uint32_t, PER_ISSUE_WARPS> candidate_indices{};
        bool any_scrb_blocked = false;
        BitVector<> ready_set(PER_ISSUE_WARPS);
-       for (uint32_t w = 0; w < PER_ISSUE_WARPS; ++w) {
-@@ -601,7 +676,8 @@ public:
-           seq_starting = (SimPlatform::instance().cycles() < ready);
-         }
+       BitVector<> yield_set(PER_ISSUE_WARPS);
+@@ -839,7 +914,8 @@ public:
+ 
+         this->check_issue_timeout(iw, wid, trace, uop_trace);
  
 -        if (scoreboard_->in_use(uop_trace)) {
 +        bool head_blocked = scoreboard_->in_use(uop_trace);
@@ -177,7 +186,7 @@ index ec729d8..f6ef056 100644
            auto uses = scoreboard_->get_uses(uop_trace);
            if (!uop_trace->log_once(true)) {
              DTH(4, "*** scoreboard-stall: dependents={");
-@@ -618,22 +694,13 @@ public:
+@@ -856,25 +932,13 @@ public:
            any_scrb_blocked = true;
          } else {
            uop_trace->log_once(false);
@@ -190,6 +199,9 @@ index ec729d8..f6ef056 100644
 -          if (lock_owner != kLockOpen && lock_owner != w) {
 -            continue;
 -          }
+-          if (yielded == w) {
+-            continue;
+-          }
 -          auto fu = (int)uop_trace->fu_type;
 -          // FU dispatch queue near full: the warp does not request. Credits also
 -          // count ops still in operand collection. The flag reaches issue through
@@ -200,19 +212,22 @@ index ec729d8..f6ef056 100644
 +        }
 +        // FU credits also count ops still in operand collection, as of two cycles back.
 +        auto lock_owner = issue_lock_owner_.at(iw);
-+        if (seq_starting || (lock_owner != kLockOpen && lock_owner != w))
++        if (seq_starting || yielded == w || (lock_owner != kLockOpen && lock_owner != w))
 +          continue;
 +        bool head_ready = !head_blocked && !fu_full_seen_.at(iw).test((int)uop_trace->fu_type);
 +        if (head_ready) {
          #ifdef VX_CFG_EXT_RTU_ENABLE
            // A TRACE macro must hold a ray-pool slot before its head uop enters
            // the SFU, or it stalls at the head of that unit's queue and starves
-@@ -644,7 +711,47 @@ public:
+@@ -885,10 +949,50 @@ public:
              continue; // ray pool full
            }
          #endif
 -          ready_set.set(w); // mark instruction as ready
 +          ready_set.set(w);
+           if (uop_trace->instr_ptr->get_issue_yield()) {
+             yield_set.set(w);
+           }
 +        } else if ((ooo_window_enabled_ || window_stats_enabled_) && lock_owner == kLockOpen) {
 +          bool has_alu = false;
 +          bool has_independent_alu = false;
@@ -256,8 +271,8 @@ index ec729d8..f6ef056 100644
          }
        }
  
-@@ -653,14 +760,26 @@ public:
-         auto w = ibuffer_arbs_.at(iw).grant(ready_set);
+@@ -898,24 +1002,41 @@ public:
+         auto w = ibuffer_arbs_.at(iw).select(ready_set);
          uint32_t wid = w * VX_CFG_ISSUE_WIDTH + iw;
          auto& ibuffer = ibuffers_.at(wid);
 -        auto trace = ibuffer->peek();
@@ -282,6 +297,7 @@ index ec729d8..f6ef056 100644
 +        }
 +      #endif
 +        if (!inject_reject && operands_.at(iw)->Input.try_send(uop_trace)) {
+           ibuffer_arbs_.at(iw).commit(w);
 +          if (window_stats_enabled_) {
 +            ++window_stats_.issued;
 +            window_stats_.bypassed += (index != 0);
@@ -289,8 +305,13 @@ index ec729d8..f6ef056 100644
            // capture register operands at issue (Operands owns regfile)
            operands_.at(iw)->fetch_operands(uop_trace);
            // spend a dispatch credit for the target FU
-@@ -670,6 +789,9 @@ public:
-           staged_since_.at(wid) = std::max(last_issue_.at(wid), trace->ibuf_time) + 1;
+           ++fu_credits_.at(iw).at((int)uop_trace->fu_type);
+           // An issue candidate is staged from the cycle after both the warp's
+           // previous issue and its own arrival in the buffer.
+-          staged_since_.at(wid) = std::max(last_issue_.at(wid), trace->ibuf_time) + 1;
++          if (index == 0) {
++            staged_since_.at(wid) = std::max(last_issue_.at(wid), trace->ibuf_time) + 1;
++          }
            last_issue_.at(wid) = SimPlatform::instance().cycles();
            DT(3, simobject_->name() << "-pipeline issue: " << *uop_trace);
 +          if (index != 0) {
@@ -299,8 +320,8 @@ index ec729d8..f6ef056 100644
            if (uop_trace->wb) {
              // update scoreboard
              scoreboard_->reserve(uop_trace);
-@@ -689,7 +811,7 @@ public:
-             }
+@@ -940,7 +1061,7 @@ public:
+             issue_yield_.at(iw) = w;
            }
            // Advance sequencer; pop ibuffer only when all micro-ops issued
 -          if (seq->advance()) {
@@ -308,18 +329,45 @@ index ec729d8..f6ef056 100644
              if (trace->instr_ptr->is_macro_op()) {
                // A macro that stalled fetch at decode releases its warp once
                // its last micro-op issues.
-@@ -702,7 +824,7 @@ public:
+@@ -953,20 +1074,24 @@ public:
                trace->~instr_trace_t();
                trace_pool_.deallocate(trace, 1);
              }
 -            ibuffer->pop();
+-            if (!head_staged_.at(wid)) {
 +            ibuffer->pop_at(index);
-             // Release ibuffer backpressure slot (matches ++ in schedule()).
-             // Saturating decrement: flush_warp_pipeline only drains the
-             // ibuffer + resets ibuf_inflight to 0, but fetch_latch_ /
-@@ -717,6 +839,13 @@ public:
-               --ibuf_inflight_.at(wid);
++            if (index != 0) {
+               this->ibuf_release(wid);
+-            }
+-            head_staged_.at(wid) = false;
+-            // The staging register takes the next instruction in the cycle it
+-            // hands this one off, so its buffer slot frees now.
+-            if (!ibuffer->empty()) {
+-              auto next = ibuffer->peek();
+-              if (!next->instr_ptr->is_macro_op()
+-               && SimPlatform::instance().cycles() > next->ibuf_time) {
+-                head_staged_.at(wid) = true;
++            } else {
++              if (!head_staged_.at(wid)) {
+                 this->ibuf_release(wid);
+               }
++              head_staged_.at(wid) = false;
++              // The staging register takes the next instruction in the cycle it
++              // hands this one off, so its buffer slot frees now.
++              if (!ibuffer->empty()) {
++                auto next = ibuffer->peek();
++                if (!next->instr_ptr->is_macro_op()
++                 && SimPlatform::instance().cycles() > next->ibuf_time) {
++                  head_staged_.at(wid) = true;
++                  this->ibuf_release(wid);
++                }
++              }
              }
+           } else if (seq->last() && !head_staged_.at(wid)) {
+             // The macro's last micro-op takes the staging register as this one
+@@ -974,6 +1099,13 @@ public:
+             head_staged_.at(wid) = true;
+             this->ibuf_release(wid);
            }
 +        } else {
 +          if (window_stats_enabled_) {
@@ -331,7 +379,7 @@ index ec729d8..f6ef056 100644
          }
        }
  
-@@ -1083,6 +1212,12 @@ private:
+@@ -1381,6 +1513,12 @@ private:
    uint32_t    mpm_class_;
    Scheduler::Ptr scheduler_;
  
@@ -345,10 +393,66 @@ index ec729d8..f6ef056 100644
    Scoreboard::Ptr scoreboard_;
    std::vector<Operands::Ptr> operands_;
 diff --git a/sim/simx/types.h b/sim/simx/types.h
-index 31f7fbd..d193064 100644
+index 431fa71..49a3071 100644
 --- a/sim/simx/types.h
 +++ b/sim/simx/types.h
-@@ -1407,6 +1407,18 @@ public:
+@@ -944,6 +944,7 @@ enum class ArbiterType {
+   RoundRobin,
+   Matrix,
+   GreedyRR,
++  GTO,
+   GreedyMatrix
+ };
+ 
+@@ -952,6 +953,7 @@ inline std::ostream &operator<<(std::ostream &os, const ArbiterType& type) {
+   case ArbiterType::Priority:   os << "Priority"; break;
+   case ArbiterType::RoundRobin: os << "RoundRobin"; break;
+   case ArbiterType::Matrix:     os << "Matrix"; break;
++  case ArbiterType::GTO:        os << "GTO"; break;
+   case ArbiterType::GreedyRR:   os << "GreedyRR"; break;
+   case ArbiterType::GreedyMatrix: os << "GreedyMatrix"; break;
+   default: assert(false);
+@@ -1032,8 +1034,8 @@ private:
+ // one keeps granting its owner while it requests, without updating the order.
+ class MatrixArbiter : public IArbiterImpl {
+ public:
+-  MatrixArbiter(uint32_t size, bool greedy = false)
+-    : size_(size), greedy_(greedy) {
++  MatrixArbiter(uint32_t size, bool greedy = false, bool low_index_first = false)
++    : size_(size), greedy_(greedy), low_index_first_(low_index_first) {
+     this->reset();
+   }
+ 
+@@ -1061,8 +1063,8 @@ public:
+ 
+   void reset() override {
+     order_.clear();
+-    for (uint32_t i = size_; i-- > 0;) {
+-      order_.push_back(i);
++    for (uint32_t i = 0; i < size_; ++i) {
++      order_.push_back(low_index_first_ ? i : size_ - 1 - i);
+     }
+     last_grant_ = -1u;
+   }
+@@ -1070,6 +1072,7 @@ public:
+ private:
+   uint32_t size_;
+   bool greedy_;
++  bool low_index_first_;
+   std::vector<uint32_t> order_;
+   uint32_t last_grant_;
+ };
+@@ -1127,6 +1130,9 @@ public:
+     case ArbiterType::GreedyRR:
+       impl_ = std::make_shared<GreedyRRArbiter>(size);
+       break;
++    case ArbiterType::GTO:
++      impl_ = std::make_shared<MatrixArbiter>(size, true, true);
++      break;
+     case ArbiterType::GreedyMatrix:
+       impl_ = std::make_shared<MatrixArbiter>(size, true);
+       break;
+@@ -1462,6 +1468,18 @@ public:
      return channel_.size();
    }
  
